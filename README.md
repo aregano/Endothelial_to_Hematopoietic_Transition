@@ -5,14 +5,29 @@ The study aimed to construct a comprehensive dataset exclusively from Endothelia
 
 ## Experimental design
 
-
+![Experimental design](/images/EHT_Experimental_design.png)
 
 Manually dissected AGMs of multiple E10.5 embryos were converted into single-cell suspensions and cryopreserved. Upon amassing a sufficient cell count, we thawed the vials and performed fluorescence-activated cell sorting (FACS) on two distinct experimental days.
 
-The dataset contains 5 experimental conditions with two controls, depending on the cell labeling strategy
+The dataset contains 5 experimental conditions with two controls, depending on the cell labeling strategy.
 
-![Experimental design](/images/EHT_Experimental_design.png)
+
 
 ## Cell labeling strategy
 
 For correctly selecting the cells of interest
+
+![Transgenes](/images/EHT_Transgenes.png)
+
+## Experimental groups
+
+**Cdh5-Cre labelling**
+Notch1 induced Deletionn in Endothelial Cells -> _Notch1_<sup>iDEC</sup>
+Jag1 induced Deletionn in Endothelial Cells->
+
+**Tie2-Cre labelling**
+Mfng induced overexpression ->
+N1ICD induced overexpression -> 
+NMyc Loss of Function -> 
+
+
