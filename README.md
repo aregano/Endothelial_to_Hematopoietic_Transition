@@ -11,7 +11,7 @@ Manually dissected AGMs of multiple E10.5 embryos were converted into single-cel
 
 The dataset contains 5 experimental conditions with two controls, depending on the cell labeling strategy
 
-
+![Experimental design](/images/EHT_Experimental_design.png)
 
 ## Cell labeling strategy
 
