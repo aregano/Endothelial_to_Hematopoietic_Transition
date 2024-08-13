@@ -22,12 +22,17 @@ For correctly selecting the cells of interest
 ## Experimental groups
 
 **Cdh5-Cre labelling**
-Notch1 induced Deletionn in Endothelial Cells -> _Notch1_<sup>iDEC</sup>
-Jag1 induced Deletionn in Endothelial Cells->
+
+Notch1 induced Deletion in Endothelial Cells -> _Notch1_<sup>iDEC</sup>
+
+Jag1 induced Deletionn in Endothelial Cells-> _Jag1_<sup>iDEC</sup>
 
 **Tie2-Cre labelling**
-Mfng induced overexpression ->
-N1ICD induced overexpression -> 
-NMyc Loss of Function -> 
+
+Mfng induced overexpression -> _Mfng_<sup>iOE Tie2-Cre</sup>
+
+N1ICD induced overexpression -> _N1ICD_<sup>iOE Tie2-Cre</sup>
+
+NMyc Loss of Function -> _NMyc_<sup>LOF Tie2-Cre</sup>
 
 
