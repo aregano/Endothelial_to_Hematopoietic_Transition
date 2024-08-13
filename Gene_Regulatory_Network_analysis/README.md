@@ -6,4 +6,8 @@ Briefly I selected the cells that belonged to the AGM and extracted GRN links us
 
 I looked into the differences in GRN between conditions by performing Network Analysis while looking at the cell populations withing the AGM. (Notebooks/Network_analysis_scAGM_EHT.ipynb)
 
+![eigenvector](../images/GRN_eigenvector.png)
+
 Furthermore I performed in silico TF perturbation analysis, where CellOracle uses the GRN models to simulate cell identity shifts in response to TF perturbation. I performed the Perturbation analysis with various genes selected for a count of 0: _Hey1, Hey2, Hes1, Gata2, Runx1, Mycn, Myc_ (Notebooks/KO_Perturbations.Hey1_KO_simulation_with_scAGM_EHT.ipynb)
+
+![perturbation](../images/TF_perturbation.png)
