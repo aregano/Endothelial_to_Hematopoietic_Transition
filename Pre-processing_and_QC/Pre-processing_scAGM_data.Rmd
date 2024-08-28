@@ -1,0 +1,455 @@
+---
+title: "scAGM_preprocess_VEQ"
+author: "Alvaro Regano"
+date: "2024-08-27"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+library(Seurat)
+library(ggplot2)
+library(DoubletFinder)
+library(BiocStyle)
+library(dittoSeq)
+library(dplyr)
+library(mcmcplots)
+library(celldex)
+library(SingleR)
+library(scRNAseq)
+library(SingleCellExperiment)
+library(escape)
+library(reshape2)
+library(tidyverse)
+
+ditto_Colors <- dittoColors(reps = 1, get.names = F)
+
+colors_seurat_long <- c("#F8766D", "#EC8239", "#DB8E00", "#C79800", "#AEA200", "#8FAA00", "#64B200", "#00B81B", "#00BD5C", "#00C085", "#00C1A7", "#00BFC4", "#00BADE", "#00B2F3", "#00A6FF",
+                    "#7C96FF", "#B385FF", "#D874FD", "#EF67EB", "#FD61D3", "#FF63B6", "#FF6B94")
+
+colors_seurat <- c("#F8766D", "#D39200", "#93AA00", "#00BA38", "#00C19F", "#00B9E3", "#619CFF", "#DB72FB", "#FF61C3")
+
+
+```
+
+# Objective
+
+This notebook contains the pre-processing of a scRNASeq dataset from E10.5 Embryos under various conditions. The goal is to produce a dataset out of the output from cellranger (matrix, feature and cell barcodes) with which to explore the data and perform various data analysis approaches (pseudotime, GRN, DEG, fgsea).
+
+The various conditions were introduced on the same 10x port. To demultiplex them we used HTOs
+
+
+# Loading matrix data from Cellranger and convert to Seurat object
+
+```{r data loading}
+scAGM.data <- Read10X(data.dir = "../raw_data/")
+
+scAGM <- CreateSeuratObject(counts = scAGM.data$`Gene Expression`, 
+                                  project = "scAGM_30Sep21", assay = "RNA",
+                                  min.cells = 3 , min.features = 200)
+scAGM[["HTO"]] <- CreateAssayObject(counts = scAGM.data$`Antibody Capture`[, colnames(x = scAGM)])
+rm(scAGM.data)
+```
+
+# Perform Dimensionality Reduction and Clustering of the RNA Assay
+
+```{r dimensionality reduction and clustering}
+DefaultAssay(scAGM) <- "RNA"
+DefaultAssay(scAGM)
+
+scAGM <- NormalizeData(scAGM)
+scAGM <- FindVariableFeatures(scAGM)
+scAGM <- ScaleData(scAGM)
+scAGM <- RunPCA(scAGM, verbose = FALSE)
+scAGM <- FindNeighbors(scAGM, dims = 1:30)
+scAGM <- FindClusters(scAGM, resolution = 0.8, verbose = FALSE)
+scAGM <- RunUMAP(scAGM, dims = 1:30)
+DimPlot(scAGM, label = TRUE)
+```
+# HTO demultiplexing
+
+```{r demultiplexing}
+#  Adding HTO data as an independent assay
+
+scAGM <- NormalizeData(scAGM, assay = "HTO", normalization.method = "CLR")
+
+scAGM <- HTODemux(scAGM, assay = "HTO", positive.quantile = 0.99)
+
+table(scAGM$HTO_classification.global)
+
+# Group cells based on the max HTO signal
+Idents(scAGM) <- "HTO_maxID"
+RidgePlot(scAGM, assay = "HTO", features = rownames(scAGM[["HTO"]])[c(1:5)], ncol = 3)
+
+FeatureScatter(scAGM, feature1 = "HTO305", feature2 = "HTO307")
+
+Idents(scAGM) <- "HTO_classification.global"
+VlnPlot(scAGM, features = "nCount_RNA", pt.size = 0.1, log = TRUE)
+```
+
+HTOs 303, 304 and 305 can be easily segregated
+
+## Subset data removing doublets and negatively labelled cells
+
+```{r subset demultiplexing}
+# First, we will remove negative cells from the object
+scAGM.subset <- subset(scAGM, idents = "Negative", invert = TRUE)
+
+# Calculate a tSNE embedding of the HTO data
+DefaultAssay(scAGM.subset) <- "HTO"
+scAGM.subset <- ScaleData(scAGM.subset, features = rownames(scAGM.subset),
+                                verbose = FALSE)
+scAGM.subset <- RunPCA(scAGM.subset, features = rownames(scAGM.subset), approx = FALSE)
+scAGM.subset <- RunTSNE(scAGM.subset, dims = 1:3, perplexity = 100, check_duplicates = F)
+DimPlot(scAGM.subset, group.by = "hash.ID")
+
+# To increase the efficiency of plotting, you can subsample cells using the num.cells argument
+HTOHeatmap(scAGM, assay = "HTO", ncells = 30000)
+
+
+# Extract the singlets
+scAGM.singlet <- subset(scAGM, idents = "Singlet")
+
+table(scAGM.singlet@meta.data$HTO_classification)
+```
+
+# Redoing Dimensionality Reduction with singlets
+
+```{r dimred v2}
+# Select the top 1000 most variable features
+scAGM.singlet <- NormalizeData(scAGM.singlet)
+scAGM.singlet <- FindVariableFeatures(scAGM.singlet, selection.method = "vst")
+
+# Scaling RNA data, we only scale the variable features here for efficiency
+scAGM.singlet <- ScaleData(scAGM.singlet, features = VariableFeatures(scAGM.singlet))
+
+# Run PCA
+scAGM.singlet <- RunPCA(scAGM.singlet, features = VariableFeatures(scAGM.singlet), verbose = F)
+
+# We select the top 10 PCs for clustering and tSNE based on PCElbowPlot
+scAGM.singlet <- FindNeighbors(scAGM.singlet, reduction = "pca", dims = 1:10)
+scAGM.singlet <- FindClusters(scAGM.singlet, resolution = 0.6, verbose = FALSE)
+scAGM.singlet <- RunTSNE(scAGM.singlet, reduction = "pca", dims = 1:10)
+
+# Projecting singlet identities on TSNE visualization
+DimPlot(scAGM.singlet, group.by = "HTO_classification")
+```
+
+# Quality Control
+
+For the QC I will look at the Feature and Gene counts, as well as the percentage of mitochondrial and ribosomal genes within each cell
+
+```{r feature qc}
+# QC Analysis
+DefaultAssay(scAGM.singlet) <- "RNA"
+scAGM.singlet[["percent.mt"]] <- PercentageFeatureSet(scAGM.singlet, pattern = "^mt-")
+head(scAGM.singlet@meta.data, 10)
+
+VlnPlot(scAGM.singlet, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"),
+        group.by = "orig.ident", ncol = 3, pt.size = 0)
+
+plot1 <- FeatureScatter(scAGM.singlet, feature1 = "nFeature_RNA",
+                        group.by = "orig.ident", feature2 = "percent.mt") +
+  geom_vline(xintercept = c(2000,7500),linetype = 2 ) +
+  geom_hline(yintercept = 10 ,linetype = 2)
+plot2 <- FeatureScatter(scAGM.singlet, feature1 = "nCount_RNA",
+                        group.by = "orig.ident",feature2 = "nFeature_RNA")+
+  geom_vline(xintercept = c(2000,60000),linetype = 2 )+
+  geom_hline(yintercept = c(2000,7500),linetype = 2 )
+plot1 / plot2
+```
+
+
+
+```{r demultiplexing conditions, fig.width=5, fig.height=7}
+nFeature_RNA <- as.data.frame(scAGM.singlet@meta.data$nFeature_RNA)
+percent_mt <- as.data.frame(scAGM.singlet@meta.data$percent.mt)
+
+Idents(scAGM.singlet) <- scAGM.singlet@meta.data$hash.ID 
+
+scAGM.singlet <- RenameIdents(scAGM.singlet, 'HTO305' = 'Control VEQ', 'HTO306' = 'NotchLOF VEQ', 'HTO307' = 'Jagged1LOF VEQ', 'HTO303' = 'Odc1_VEQ_Liver', 'HTO304' = 'Odc1_VEQ_Lung')
+
+scAGM.singlet@meta.data$Condition <- scAGM.singlet@active.ident
+
+table(scAGM.singlet@meta.data$Condition)
+
+# Ribosomal genes
+
+scAGM.singlet <- PercentageFeatureSet(scAGM.singlet, "^Rp[sl]", col.name = "percent_ribo")
+
+# Hemoglobin genes
+
+scAGM.singlet <- PercentageFeatureSet(scAGM.singlet, "^Hb[^(p)]", col.name = "percent_hb")
+
+# Violin Plots
+
+feats <- c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent_ribo", "percent_hb")
+VlnPlot(scAGM.singlet, group.by = "orig.ident", features = feats, pt.size = 0.1, ncol = 3) +
+  NoLegend()
+
+
+# Clear up the plots
+
+scAGM.singlet <- subset(scAGM.singlet,
+                 subset = nFeature_RNA > 2000 & nFeature_RNA < 6000 &
+                   nCount_RNA > 2000 & nCount_RNA < 50000  & percent.mt < 10 & percent_ribo < 35 & percent_hb < 1)
+
+scAGM.singlet <- subset(scAGM.singlet,
+                        subset = Condition == "Control VEQ" | Condition == "NotchLOF VEQ" | Condition == "Jagged1LOF VEQ")
+
+Idents(scAGM.singlet) <- "hash.ID"
+
+scAGM.singlet <- RenameIdents(scAGM.singlet, 'HTO305' = 'Control VEQ', 'HTO306' = 'NotchLOF VEQ', 'HTO307' = 'Jagged1LOF VEQ')
+
+scAGM.singlet@active.ident -> scAGM.singlet@meta.data$Condition
+
+table(scAGM.singlet@meta.data$Condition)
+```
+
+After looking at the various plots I set up on removing cells that contained:
+less than 2000 or more than 6000 Features (genes)
+less that 2000 or more than 50,000 Counts (Transcripts)
+more than 10% mitochondrial genes
+more than 35% ribosomal genes
+more than 1% hemo genes
+
+## Dimensionality Reduction of cells following demultiplexing and QC
+
+```{r pressure}
+
+# Normalize data
+
+scAGM.singlet <- NormalizeData(scAGM.singlet, 
+                        normalization.method = "LogNormalize",
+                        scale.factor = 10000)
+
+
+
+# Identification of highly variable features (feature selection)
+
+scAGM.singlet <- FindVariableFeatures(scAGM.singlet, 
+                               selection.method = "vst",
+                               nfeatures = 2000)
+top10 <- head(VariableFeatures(scAGM.singlet), 10)
+top10
+
+vars <- VariableFeatures(scAGM.singlet)
+
+vars <- as.data.frame(vars) 
+
+vars %>%  filter(!grepl("^Hb[^(p)]", 1)) %>% filter(!grepl("^mt-", 1)) %>% filter(!grepl("^Rp[sl]", 1)) %>% nrow()
+
+# There are no mitochondrial, ribosomal or hemmoglobine related genes in the to 2000 variable Features
+
+plot1 <- VariableFeaturePlot(scAGM.singlet)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot2
+
+# Scaling the data
+
+all.genes <- rownames(scAGM.singlet)
+# all.genes <- as.data.frame(all.genes)
+scAGM.singlet <- ScaleData(scAGM.singlet, features = all.genes)
+
+
+## Perform linear dimensional reduction
+
+scAGM.singlet <- RunPCA(scAGM.singlet,
+                 features = VariableFeatures(object = scAGM.singlet), verbose = F)
+
+
+# Examine and visualize PCA results a few different ways
+
+print(scAGM.singlet[["pca"]], dims = 1:5, nfeatures = 5)
+VizDimLoadings(scAGM.singlet, dims = 1:2, reduction = "pca")
+DimPlot(scAGM.singlet,group.by = "orig.ident", reduction = "pca")
+DimHeatmap(scAGM.singlet, dims = 1:9, cells = 500, balanced = TRUE)
+
+# Determine the 'dimensionality' of the dataset
+
+ElbowPlot(scAGM.singlet, ndims = 30)
+
+```
+
+```{r Dimplot VEQ}
+# Cluster the cells
+
+scAGM.singlet <- FindNeighbors(scAGM.singlet, dims = 1:14)
+scAGM.singlet <- FindClusters(scAGM.singlet, resolution = 0.1)
+scAGM.singlet <- FindClusters(scAGM.singlet, resolution = 0.2)
+scAGM.singlet <- FindClusters(scAGM.singlet, resolution = 0.35)
+
+
+DimPlot(scAGM.singlet)
+
+#Run UMAP
+
+scAGM.singlet <- RunUMAP(scAGM.singlet, dims = 1:14)
+
+DimPlot(scAGM.singlet, group.by = "RNA_snn_res.0.35")
+```
+
+
+```{r Dimplot VEQ split, fig.width=20, fig.height=5}
+
+# UMAP
+
+# Load the "scales" package
+require(scales)
+
+# Create vector with levels of object@ident
+identities <- levels(scAGM.singlet@meta.data$RNA_snn_res.0.35)
+
+# Create vector of default ggplot2 colors
+my_color_palette <- hue_pal()(length(identities))
+
+DimPlot(scAGM.singlet, label = T)
+
+p1 <- DimPlot(scAGM.singlet, cols = my_color_palette, pt.size = 1.2, split.by = "Condition", combine = T)
+
+p21 <- p1+
+  theme(strip.text.x = element_text(size = 24), plot.title = element_blank())+NoLegend()+xlab("UMAP_1")+ylab("UMAP_2")
+
+p22 <- DimPlot(scAGM.singlet, cols = my_color_palette, pt.size = 1.2)+theme(legend.text = element_text(size = 14), axis.title.x = element_blank(), axis.line.y = element_blank(), axis.text.y = element_blank(), axis.title.y = element_blank(), axis.ticks = element_blank(), plot.title = element_blank())
+
+p23 <- list(p21, p22)
+
+design <- c(patchwork::area(1, 1, 1, 3), patchwork::area(1, 4, 1, 4.5))
+
+p24 <- Reduce( `+`,  p23)+patchwork::plot_layout(design = design)
+
+
+# cairo_pdf("Plots/QC/UMAP_scAGM30Sep21_Condition_split.pdf",  width = 28, height = 6, family = "Arial")
+p24
+# dev.off()
+
+
+# jpeg("Plots/QC/UMAP_scAGM30Sep21_Condition_split.jpeg", width = 28, height = 6, units = 'in', res = 800)
+# p24
+# dev.off()
+
+```
+
+
+
+
+# Label Transfer from Zhu et al 2020
+
+
+```{r Dimplot label transfer, fig.width=20, fig.height=5}
+
+Zhu_dataset <- readRDS("../rds/Zhu_dataset.rds")
+
+scAGM <- scAGM.singlet
+
+RowsNA<-names(which(rowSums(is.na(Zhu_dataset@assays$RNA@counts))>0))
+
+# RowsNA
+
+'%!in%' <- function(x,y)!('%in%'(x,y)) #this is a NOT IN function
+RowsKEEP<-rownames(Zhu_dataset)[rownames(Zhu_dataset) %!in% RowsNA]
+Zhu_dataset<-subset(Zhu_dataset,features=RowsKEEP)
+
+Zhu_dataset <- NormalizeData(Zhu_dataset, verbose = T)
+Zhu_dataset <- FindVariableFeatures(Zhu_dataset, selection.method = "vst", nfeatures = 2000,
+                                           verbose = T)
+
+anchors <- FindTransferAnchors(reference = Zhu_dataset,
+                               query = scAGM, dims = 1:14)
+# transfer labels
+predictions <- TransferData(anchorset = anchors, refdata = Zhu_dataset$Cell_type_refined, dims = 1:14)
+
+scAGM <- AddMetaData(object = scAGM, metadata = predictions)
+
+scAGM@meta.data$ZhuClustering <- scAGM@meta.data$predicted.id
+
+# saveRDS(scAGM, "rds/scAGM_AllCells.CtrlVEQ.Notch1LOF.Jag1LOF.VEQ.rds")
+
+##########################################################
+
+# Producing a UMAP
+
+Idents(scAGM) <- scAGM@meta.data$ZhuClustering
+
+p1 <- DimPlot(scAGM, pt.size = 1.2, group.by = "ZhuClustering", split.by = "Condition", combine = T)
+
+p21 <- p1+
+  # facet_grid(~Condition, labeller = as_labeller(new_labels, default = label_parsed))+
+  theme(strip.text.x = element_text(size = 24), plot.title = element_blank())+NoLegend()+xlab("UMAP_1")+ylab("UMAP_2")
+
+p22 <- DimPlot(scAGM, group.by = "ZhuClustering", pt.size = 1.2, label = T, label.box = T, repel = T)+theme(legend.text = element_text(size = 14), axis.title.x = element_blank(), axis.line.y = element_blank(), axis.text.y = element_blank(), axis.title.y = element_blank(), axis.ticks = element_blank(), plot.title = element_blank())
+
+p23 <- list(p21, p22)
+
+table(scAGM@meta.data$Condition)
+
+design <- c(patchwork::area(1, 1, 1, 8), patchwork::area(1, 9, 1, 9.5))
+
+p24 <- Reduce( `+`,  p23)+patchwork::plot_layout(design = design)
+
+
+# cairo_pdf("Plots/scAGM_AllCells/Zhu_et_al/UMAP_ZhuClustering.pdf",  width = 58, height = 6, family = "Arial")
+p24
+# dev.off()
+
+
+# jpeg("Plots/scAGM_AllCells/Zhu_et_al/UMAP_ZhuClustering.jpeg", width = 58, height = 6, units = 'in', res = 400)
+# p24
+# dev.off()
+```
+
+```{r Barplot label transfer, fig.width=10, fig.height=5}
+# Bar Plot Zhu labels
+
+table(scAGM@meta.data$Condition)
+
+# Load the "scales" package
+require(scales)
+
+scAGM@meta.data$ZhuClustering <- as.factor(scAGM@meta.data$ZhuClustering)
+
+# Create vector with levels of object@ident
+identities <- levels(scAGM@meta.data$ZhuClustering)
+
+# Create vector of default ggplot2 colors
+my_color_palette <- hue_pal()(length(identities))
+
+
+p1 <- dittoBarPlot(scAGM, var = "ZhuClustering", group.by = "Condition", 
+                   # x.reorder = c(1,3,2,4),
+                   color.panel = my_color_palette,
+                   xlab = NULL, main = NULL, y.breaks = c(0,0.25,0.5, 0.75, 1), min = 0, max = 1)+
+  theme(axis.text=element_text(size=15), axis.title = element_text(size = 18), legend.text = element_text(size = 16), axis.text.x = element_text(angle = 25))+
+  # scale_x_discrete(labels=c("Control", bquote(italic(Dll4)^iDEC), bquote(italic(Dll4Het)^iDEC), bquote(italic(DBZ)^iDEC)))+
+  geom_col(width = 0.1)+
+  # scale_y_discrete(labels=c("0", "25", "50", "75", "100"))
+  scale_y_continuous(labels = c("0", "25", "50", "75", "100"))
+
+# cairo_pdf("Plots/Zhu_et_al/BarPlot_ZhuClustering.pdf",  width = 10, height = 6, family = "Arial")
+p1
+# dev.off()
+
+
+# jpeg("Plots/Zhu_et_al/BarPlot_ZhuClustering.jpeg", width = 10, height = 6, units = 'in', res = 800)
+# p1
+# dev.off()
+```
+
+```{r ViolinPlot label transfer, fig.width=10, fig.height=5}
+# VlnPlot with markers
+
+genes <- c("Runx1", "Kit", "Myb", "Ikzf2", "Gfi1", "Tek", "Cdh5", "Myc", "Mycn", "Mfng", "Notch1", "Jag1", "Hey2", "Hey1", "Hes1")
+
+Idents(scAGM) <- "ZhuClustering"
+
+
+p2 <- VlnPlot(scAGM, features = genes, split.by = "ZhuClustering", stack = T)
+
+# cairo_pdf("Plots/Zhu_et_al/VlnPlot_Embryo_markers_scAGM_ZhuClustering.pdf",  width = 20, height = 12, family = "Arial")
+p2
+# dev.off()
+
+# jpeg("Plots/Zhu_et_al/VlnPlot_Embryo_markers_scAGM_ZhuClustering.jpeg", width = 20, height = 12, units = 'in', res = 800)
+# p2
+# dev.off()
+
+```
